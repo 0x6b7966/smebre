@@ -1,3 +1,0 @@
-Pin 2.12 kit 58423
-A: Source/pin/core_ia32/operand_ia32.cpp:INS_OperandIsReg:INS_OperandIsReg:356: assertion failed: n < xed_inst_noperands(xedi)
-
