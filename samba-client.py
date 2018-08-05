@@ -191,6 +191,8 @@ if __name__ == "__main__":
 	# TCP THS
 	rp = three_handshake(skt)
 
+	time.sleep(10)
+	
 	# Negotiate protocol request
 	npr_pkt = smbtrace[23]
 	rp = send_receive(skt, rp, npr_pkt, send_ack=True)
@@ -203,5 +205,6 @@ if __name__ == "__main__":
 	tcar_pkt = smbtrace[29]
 	rp = send_receive(skt, rp, tcar_pkt, send_ack=True)
 
+	
 	# Disconnect session
 	disconnect_session(skt, rp)
