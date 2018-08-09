@@ -191,20 +191,25 @@ if __name__ == "__main__":
 	# TCP THS
 	rp = three_handshake(skt)
 
-	time.sleep(10)
+	time.sleep(1)
 	
 	# Negotiate protocol request
 	npr_pkt = smbtrace[23]
 	rp = send_receive(skt, rp, npr_pkt, send_ack=True)
 
+	time.sleep(1)
+
 	# Session setup request
 	ssr_pkt = smbtrace[27]
 	rp = send_receive(skt, rp, ssr_pkt)
+
+	time.sleep(1)
 
 	# Tree connect request
 	tcar_pkt = smbtrace[29]
 	rp = send_receive(skt, rp, tcar_pkt, send_ack=True)
 
-	
+	time.sleep(1)
+
 	# Disconnect session
 	disconnect_session(skt, rp)
