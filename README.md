@@ -11,6 +11,6 @@ State machine expansion - using binary reverse engineering with dynamic taint an
 - For more detailed instruction, refer to the section "Pintool for Linux users" in installation doc (https://triton.quarkslab.com/documentation/doxygen/#install_sec)
 
 **How to run**
-- Under construction
+- Please refer to the HOWTO file in the root directory
 
 **Possible issue**
