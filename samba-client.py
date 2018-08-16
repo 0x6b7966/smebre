@@ -47,13 +47,24 @@ def generate_ack(rp, type):
 	return p
 
 # Filter out except TCP packets
-def filter_tcp_ans(ans):
+# Or wait for long time until one Raw message is received
+def filter_tcp_ans(skt, ans, findraw=False):
 	global sport
-	tcp_list = []
+	tcp_resp_list = []
 	for sr in ans:
 		if sr[1].haslayer("TCP") and sr[1].getlayer("TCP").dport == sport:
-			tcp_list.append(sr)
-	return tcp_list
+			tcp_resp_list.append(sr[1])
+	if findraw is True:
+		for t in range(150): # max waiting seconds
+			sniff_list = skt.sniff(timeout=1)
+			if len(sniff_list) < 1:
+				continue
+			for r in sniff_list:
+				if r.haslayer("Raw") and r.haslayer("TCP"): # filter out UDP(DNS)
+					if r.getlayer("TCP").dport == sport:	# filter out remaining SMB
+						tcp_resp_list.append(r)
+						return tcp_resp_list
+	return tcp_resp_list
 
 def get_tcp_seg_len(rp):
 	ip_total_len = rp.getlayer(IP).len
@@ -78,13 +89,12 @@ def disconnect_session(skt, rp):
 	# Send FIN-ACK and Listen FIN-ACK
 	FIN_ACK = generate_ack(rp, "FA")
 	ans, unans = skt.sr(FIN_ACK, multi=1, timeout=timeout, verbose=False) # SEND -> GET RESPONSE (normal case) -> GET FINACK
-	ans = filter_tcp_ans(ans)
+	resps = filter_tcp_ans(skt, ans)
 
 	FIN_ACK = None
 
 	# FIN-ACK picker
-	for tup in ans:
-		resp = tup[1]
+	for resp in resps:
 		if resp.getlayer("TCP").flags == 0x11:
 			FIN_ACK = resp
 
@@ -148,12 +158,11 @@ def send_receive(skt, rp, reqmsg, send_ack=False):
 	_reqmsg = localize_msg(rp, reqmsg)
 
 	ans, unans = skt.sr(_reqmsg, verbose=False, multi=1, timeout=timeout)
-	ans = filter_tcp_ans(ans)
+	resps = filter_tcp_ans(skt, ans, findraw=True)
 	_rp = None
 
-	# ans structure : [(sent, received), (sent, received), ...]
-	for tup in ans:
-		resp = tup[1]
+	# ans structure : [(sent, received), (sent, received), ...] @ depricated
+	for resp in resps:
 		if resp.haslayer(Raw): # processing depending on SMB responses
 			# Strip [NetBIOS session service]
 			nb_layer = resp.getlayer(Raw).load[0:4]
@@ -191,25 +200,28 @@ if __name__ == "__main__":
 	# TCP THS
 	rp = three_handshake(skt)
 
-	time.sleep(1)
+	# time.sleep(1)
 	
 	# Negotiate protocol request
+	print "=====================send Negotiate protocol request======================="
 	npr_pkt = smbtrace[23]
 	rp = send_receive(skt, rp, npr_pkt, send_ack=True)
 
-	time.sleep(1)
+	# time.sleep(1)
 
 	# Session setup request
+	print "=====================send session setup request======================="
 	ssr_pkt = smbtrace[27]
 	rp = send_receive(skt, rp, ssr_pkt)
 
-	time.sleep(1)
+	# # # time.sleep(1)
 
 	# Tree connect request
+	print "=====================send Tree connect request======================="
 	tcar_pkt = smbtrace[29]
 	rp = send_receive(skt, rp, tcar_pkt, send_ack=True)
 
-	time.sleep(1)
+	# time.sleep(1)
 
 	# Disconnect session
 	disconnect_session(skt, rp)

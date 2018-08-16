@@ -11,3 +11,7 @@
 
 2. Find the log
   i.e. tritonlog_[pid].log
+
+# For development
+1. Tracing write-related syscalls
+  strace -f -p[PID] -s9999 -e trace=write

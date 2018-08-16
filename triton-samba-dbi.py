@@ -1,6 +1,6 @@
 #! /usr/bin/env python
 
-import os, sys, traceback
+import os, sys, traceback, time
 # import syscallmap32
 
 import numpy as np
@@ -9,37 +9,34 @@ from pintool import *
 from sets import Set
 from hexdump import *
 
-GREEN = "\033[92m"
-ENDC  = "\033[0m"
+# GREEN = "\033[92m"
+# ENDC  = "\033[0m"
 SSIZE_MAX = 32767
 logfile = "tritonlog_"
 logext = ".log"
-#os.remove(logfile)
 readbuf = None
-routineAddr = None
-instructionAddr = None
 inst_write_flag = False
-lastRoutineString = ""
-stdset = Set([])
 ctx = getTritonContext()
+astCtxt = ctx.getAstContext()
+f = None
+branch_cnt = 0
+branch_sat_cnt = 0
+branch_unsat_cnt = 0
 
-def printExecInfo(f=None, verbose=True):
-	global logfile, logext
-	if f is not None: # close previous fd
-		f.close()
-	f = open(logfile+str(getPid())+logext, 'a+')
+def printExecInfo(verbose=True):
+	global f, logfile, logext
+	if f is None:
+		f = open(logfile+str(getPid())+logext, 'a+')
 	exc_type, exc_value, exc_traceback = sys.exc_info()
 	if verbose is False:
 		# Print error type only 
-		f.write("[-] syscallExit(), Error type in line %d: %s\n" %
+		f.write("[-] Error type in line %d: %s\n" %
 			(exc_traceback.tb_lineno, exc_type) )
 	else:
 		tblist = traceback.format_exception(exc_type, exc_value, exc_traceback)
-		f.write("[-] syscallExit(), Error details:\n")
+		f.write("[-] Error details:\n")
 		for tbstr in tblist:
 			f.write("%s"%tbstr)
-	f.close()
-
 
 def getMemoryBytearr(addr, size):
 	a = bytearray()
@@ -50,35 +47,29 @@ def getMemoryBytearr(addr, size):
 
 def syscallEntry(threadId, std):
 	global readbuf, stdset
-	# if (threadId, std) not in stdset:
-	# 	stdset.add((threadId, std))
-	# 	print "[+] (%d %d) created" % (threadId, std)
-	# f.write("[+] syscall %d called\n" % getSyscallNumber(std))
-	# print "syscall %d called" % getSyscallNumber(std)
 
-	
 	# Check if the syscall is read()
 	if getSyscallNumber(std) == SYSCALL64.READ:
 		fd = getSyscallArgument(std, 0)
-		if fd < 0x20:
-			return
 		buf_base = getSyscallArgument(std, 1)
 		size = getSyscallArgument(std, 2)
+		if fd < 0x20 or size < 0x10:
+			return
 		# print "READ() | fd: %d, buf_base : 0x%x, %d" % (fd, buf_base, size)
 		readbuf = {'fd': fd, 'buf_base': buf_base, 'size': size, 'arch': 64}
 
 	elif getSyscallNumber(std) == SYSCALL32.READ:
 		fd = getSyscallArgument(std, 0)
-		if fd < 0x20:
-			return
 		buf_base = getSyscallArgument(std, 1)
 		size = getSyscallArgument(std, 2)
+		if fd < 0x20 or size < 0x10:
+			return
 		# print "READ() | fd: %d, buf_base : 0x%x, %d" % (fd, buf_base, size)
 		readbuf = {'fd': fd, 'buf_base': buf_base, 'size': size, 'arch': 32}
 
 
 def syscallExit(threadId, std):
-	global readbuf, instructionAddr, ctx, inst_write_flag
+	global f, readbuf, instructionAddr, ctx, inst_write_flag, branch_unsat_cnt, branch_sat_cnt
 
 	if readbuf is not None and getSyscallReturn(std) > 0:
 		fd = readbuf['fd']
@@ -88,14 +79,11 @@ def syscallExit(threadId, std):
 			readbuf = None
 			return
 		arch = readbuf['arch']
-		# routineName = getRoutineName(instructionAddr)
-		f = None
+		
 		try:
 			buf_data = getMemoryBytearr(buf_base, size)
-			f = open(logfile+str(getPid())+logext, 'a+')
-			# f.write("[+] PID/RTN/ADDR : %d/%s/%x\nsyscall%d read(%x, 0x%x, %d)\n%s\n" % 
-			# 	(getPid(), routineName, instructionAddr, arch, fd, buf_base, size, 
-			# 	hexdump(bytes(buf_data), result='return')[0:1216])) #76 bytes per line (16 bytes shown x 16 lines)
+			if f is None:
+				f = open(logfile+str(getPid())+logext, 'a+')
 
 			f.write("[+] PID(%d): syscall%d read(%x, 0x%x, %d)\n%s\n" % 
 				(getPid(), arch, fd, buf_base, size, 
@@ -106,7 +94,12 @@ def syscallExit(threadId, std):
 			if ctx.isTaintEngineEnabled() is False:
 				ctx.enableTaintEngine(True)
 				f.write("[DEBUG] taintEngineEnabled\n")
-			# ctx.setTaintMemory(MemoryAccess(buf_base, size), True)
+			if ctx.isSymbolicEngineEnabled() is False:
+				ctx.enableSymbolicEngine(True)
+				f.write("[DEBUG] sylbolicEngineEnabled\n")
+
+			ctx.clearPathConstraints()
+			ctx.concretizeAllMemory()
 
 			# Iterate for each byte of memory (size in memoryaccess is just CPU.SIZE!)
 			offset = 0
@@ -118,21 +111,21 @@ def syscallExit(threadId, std):
 			    offset += 1
 			f.write("[+] %d bytes tainted from the memory 0x%x\n" % (offset, buf_base))
 
-			f.close()
-			# (Under development) Check if the message is 
-
 		# except Exception:
-		# 	# f.write("[+] PID/RTN/ADDR : %d/%s/%x\nsyscall%d read(%x, 0x%x, %d) (Over SSIZE_MAX or Protected)\n" %
-		# 	# 	(getPid(), routineName, instructionAddr, arch, fd, buf_base, size))
-		# 	# f.write("[+] syscall%d read(%x, 0x%x, %d) (Protected)\n" % 
-		# 	# 	(arch, fd, buf_base, size))
+		# routineName = getRoutineName(instructionAddr)
+	 	# f.write("[+] PID/RTN/ADDR : %d/%s/%x\nsyscall%d read(%x, 0x%x, %d) (Over SSIZE_MAX or Protected)\n" %
+	 	# 	(getPid(), routineName, instructionAddr, arch, fd, buf_base, size))
+	 	# f.write("[+] syscall%d read(%x, 0x%x, %d) (Protected)\n" % 
+	 	# 	(arch, fd, buf_base, size))
 		# 	pass
 		except TypeError:
 			pass
 		except:
-			printExecInfo(f=f)
+			printExecInfo()
 		finally:
 			readbuf = None
+			branch_unsat_cnt = 0
+			branch_sat_cnt = 0
 
 		# (Under construction) Taint memory read via specific IP source
 
@@ -144,10 +137,70 @@ def image(imagePath, imageBase, imageSize):
 	f.write('Image size: %d\n'% imageSize)
 	f.close()
 
+def path_constraints():
+	global ctx
+	pco = ctx.getPathConstraints()
+
+	# List of symbolic values solved. list_brch_smvs[branch_idx][path_idx] 
+	list_brch_smvs = []
+	# if len(pco) < 15:
+	# 	return list_brch_smvs
+	for pc in pco:
+		if pc.isMultipleBranches():
+			p0   =  pc.getBranchConstraints()[0]['constraint']
+			p1   =  pc.getBranchConstraints()[1]['constraint']
+			p0_smvs = list()
+			p1_smvs = list()
+
+			# Branch 1
+			models  = ctx.getModel(p0)
+			if len(models) == 0:
+			for k, v in models.items():
+				p0_smvs.append(str(v))
+
+			# Branch 2
+			models  = ctx.getModel(p1)
+			if len(models) == 0:
+			for k, v in models.items():
+				p1_smvs.append(str(v))
+
+			list_brch_smvs.append(p0_smvs)
+			list_brch_smvs.append(p1_smvs)
+
+	# ctx.clearPathConstraints()
+	return list_brch_smvs
 
 def before(instruction):
-	global lastRoutineString, routineAddr, instructionAddr
+	global f, lastRoutineString, routineAddr, instructionAddr, branch_sat_cnt, branch_unsat_cnt
 	instructionAddr = instruction.getAddress()
+
+	try:
+		if ctx.isTaintEngineEnabled():
+			if instruction.isTainted() is True:
+				# f = open(logfile+str(getPid())+logext, 'a+')
+				if instruction.isBranch() is True:
+					st = time.time()
+					list_brch_smvs = path_constraints()
+					for brch_smvs in list_brch_smvs:
+						if len(brch_smvs[0]) == 0 or len(brch_smvs[1]) == 0:
+							branch_unsat_cnt += 1
+							f.write('[-] Unsat branches no. : %d' % branch_unsat_cnt)
+						else:
+							branch_sat_cnt += 1
+							f.write("[+] Sat branches no. : %d" % branch_sat_cnt)
+							et = time.time() - st
+							f.write('\t(Time elapsed : %.3f)\n' % et)
+							f.write('B1 - %s\n' % ('|'.join(brch_smvs[0])))
+							f.write('B2 - %s\n' % ('|'.join(brch_smvs[1])))
+						f.write("B")
+						f.write("\t%#x: %s\n" %(instruction.getAddress(), instruction.getDisassembly()))
+				else:
+					f.write("\t%#x: %s\n" %(instruction.getAddress(), instruction.getDisassembly()))
+			# if instruction.getType() == OPCODE.CALL:
+					# f.write("\t%#x: %s\n" %(instruction.getAddress(), instruction.getDisassembly()))
+
+	except:
+		printExecInfo()
 
 	# Show AST Representation (symbolic execution) if it has tainted REG or MEM
 	# if instruction.isSymbolized():
@@ -156,35 +209,10 @@ def before(instruction):
 	# 	for expr in instruction.getSymbolicExpressions():
 	# 		f.write("\t%s\n" % expr)
 	# 	f.close()
-
-	"""
-	if instruction.getType() == OPCODE.CALL:
-		routineAddr = getCurrentRegisterValue(getTritonContext().registers.rdi)
-		print type(routineAddr)
-	"""
+	
 
 def after(instruction):
-	global ctx, instructionAddr, GREEN, ENDC, inst_write_flag
-	# if inst_write_flag is True:
-	# 	f = open(logfile+str(getPid())+logext, 'a+')
-	# 	f.write("\t%x: %s\n" %(instructionAddr, instruction))
-	# 	f.close()
-	# Show instruction if it has tainted REG or MEM
-	f = None
-	try:
-		if ctx.isTaintEngineEnabled():
-			f = open(logfile+str(getPid())+logext, 'a+')
-			if instruction.isBranch() is True:
-				f.write("[B]")
-			if instruction.isTainted() is True:
-				f.write("[T]\t%#x: %s\n" %(instruction.getAddress(),instruction.getDisassembly()))
-			else:
-				f.write("\t%#x: %s\n" %(instruction.getAddress(), instruction.getDisassembly()))
-			f.close()
-	except:
-		printExecInfo(f=f)
-
-	
+	pass
 
 if __name__ == '__main__':
 
@@ -192,25 +220,21 @@ if __name__ == '__main__':
 	ctx.enableSymbolicEngine(False)
 	ctx.enableTaintEngine(False)
 	ctx.enableMode(MODE.ALIGNED_MEMORY, True)
-	#ctx.enableMode(MODE.ONLY_ON_TAINTED, True) # Perform symbolic execution only on tainted instructions
+	ctx.enableMode(MODE.ONLY_ON_TAINTED, True) # Perform symbolic execution only on tainted instructions
 
 	# SET TRITON ANALYSIS STARTING POINT
-	# startAnalysisFromEntry()
-	startAnalysisFromSymbol('__read')
+	startAnalysisFromEntry()
+	# startAnalysisFromSymbol('__read')
+
+	setupImageWhitelist(['smbd'])
 
 	# INSERT CALLS ON PIN
-	# insertCall(before, INSERT_POINT.BEFORE)
+	insertCall(before, INSERT_POINT.BEFORE)
 	# insertCall(image, INSERT_POINT.IMAGE_LOAD)
 	insertCall(syscallEntry, INSERT_POINT.SYSCALL_ENTRY)
 	insertCall(syscallExit, INSERT_POINT.SYSCALL_EXIT)
-	insertCall(after, INSERT_POINT.AFTER)
-	
+	# insertCall(after, INSERT_POINT.AFTER)
 
 	# (Under construction) If the instruction refers to the tainted memory, mark as the range of bytes symbolic
 	#insertCall(cb_ir,       INSERT_POINT.BEFORE_SYMPROC)
-
-	# (Under construction) Print all the branches that encountered
-
 	runProgram()
-
-f.close()
