@@ -214,7 +214,7 @@ if __name__ == "__main__":
 	ssr_pkt = smbtrace[27]
 	rp = send_receive(skt, rp, ssr_pkt)
 
-	# # # time.sleep(1)
+	# time.sleep(1)
 
 	# Tree connect request
 	print "=====================send Tree connect request======================="

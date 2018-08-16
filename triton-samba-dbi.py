@@ -1,7 +1,6 @@
 #! /usr/bin/env python
 
 import os, sys, traceback, time
-# import syscallmap32
 
 import numpy as np
 from triton import *
@@ -15,13 +14,10 @@ SSIZE_MAX = 32767
 logfile = "tritonlog_"
 logext = ".log"
 readbuf = None
-inst_write_flag = False
-ctx = getTritonContext()
-astCtxt = ctx.getAstContext()
 f = None
-branch_cnt = 0
-branch_sat_cnt = 0
-branch_unsat_cnt = 0
+
+brch_sat_cnt = 0
+brch_unsat_cnt = 0
 
 def printExecInfo(verbose=True):
 	global f, logfile, logext
@@ -69,7 +65,7 @@ def syscallEntry(threadId, std):
 
 
 def syscallExit(threadId, std):
-	global f, readbuf, instructionAddr, ctx, inst_write_flag, branch_unsat_cnt, branch_sat_cnt
+	global f, readbuf, instructionAddr, ctx, brch_unsat_cnt, brch_sat_cnt
 
 	if readbuf is not None and getSyscallReturn(std) > 0:
 		fd = readbuf['fd']
@@ -85,11 +81,11 @@ def syscallExit(threadId, std):
 			if f is None:
 				f = open(logfile+str(getPid())+logext, 'a+')
 
+			# (Under construction) Taint memory read via specific IP source	
+
 			f.write("[+] PID(%d): syscall%d read(%x, 0x%x, %d)\n%s\n" % 
 				(getPid(), arch, fd, buf_base, size, 
 				hexdump(bytes(buf_data), result='return')[0:1216])) #76 bytes per line (16 bytes shown x 16 lines)
-
-			inst_write_flag = True
 			
 			if ctx.isTaintEngineEnabled() is False:
 				ctx.enableTaintEngine(True)
@@ -124,10 +120,8 @@ def syscallExit(threadId, std):
 			printExecInfo()
 		finally:
 			readbuf = None
-			branch_unsat_cnt = 0
-			branch_sat_cnt = 0
-
-		# (Under construction) Taint memory read via specific IP source
+			brch_unsat_cnt = 0
+			brch_sat_cnt = 0
 
 def image(imagePath, imageBase, imageSize):
 	f = open(logfile+str(getPid())+logext, 'a+')
@@ -140,11 +134,8 @@ def image(imagePath, imageBase, imageSize):
 def path_constraints():
 	global ctx
 	pco = ctx.getPathConstraints()
-
-	# List of symbolic values solved. list_brch_smvs[branch_idx][path_idx] 
-	list_brch_smvs = []
-	# if len(pco) < 15:
-	# 	return list_brch_smvs
+	
+	list_brch_smvs = [] # list_brch_smvs[branch_idx][path_idx] 
 	for pc in pco:
 		if pc.isMultipleBranches():
 			p0   =  pc.getBranchConstraints()[0]['constraint']
@@ -171,23 +162,22 @@ def path_constraints():
 	return list_brch_smvs
 
 def before(instruction):
-	global f, lastRoutineString, routineAddr, instructionAddr, branch_sat_cnt, branch_unsat_cnt
+	global f, lastRoutineString, routineAddr, instructionAddr, brch_sat_cnt, brch_unsat_cnt
 	instructionAddr = instruction.getAddress()
 
 	try:
 		if ctx.isTaintEngineEnabled():
 			if instruction.isTainted() is True:
-				# f = open(logfile+str(getPid())+logext, 'a+')
 				if instruction.isBranch() is True:
 					st = time.time()
 					list_brch_smvs = path_constraints()
 					for brch_smvs in list_brch_smvs:
 						if len(brch_smvs[0]) == 0 or len(brch_smvs[1]) == 0:
-							branch_unsat_cnt += 1
-							f.write('[-] Unsat branches no. : %d' % branch_unsat_cnt)
+							brch_unsat_cnt += 1
+							f.write('[-] Unsat branches no. : %d' % brch_unsat_cnt)
 						else:
-							branch_sat_cnt += 1
-							f.write("[+] Sat branches no. : %d" % branch_sat_cnt)
+							brch_sat_cnt += 1
+							f.write("[+] Sat branches no. : %d" % brch_sat_cnt)
 							et = time.time() - st
 							f.write('\t(Time elapsed : %.3f)\n' % et)
 							f.write('B1 - %s\n' % ('|'.join(brch_smvs[0])))
@@ -202,19 +192,13 @@ def before(instruction):
 	except:
 		printExecInfo()
 
-	# Show AST Representation (symbolic execution) if it has tainted REG or MEM
-	# if instruction.isSymbolized():
-	# 	f = open(logfile+str(getPid())+logext, 'a+')
-	# 	f.write('SymEx----------\n')
-	# 	for expr in instruction.getSymbolicExpressions():
-	# 		f.write("\t%s\n" % expr)
-	# 	f.close()
-	
-
 def after(instruction):
 	pass
 
 if __name__ == '__main__':
+
+	ctx = getTritonContext()
+	astCtxt = ctx.getAstContext()
 
 	# ctx.setArchitecture(ARCH.X86_64)
 	ctx.enableSymbolicEngine(False)
@@ -222,19 +206,16 @@ if __name__ == '__main__':
 	ctx.enableMode(MODE.ALIGNED_MEMORY, True)
 	ctx.enableMode(MODE.ONLY_ON_TAINTED, True) # Perform symbolic execution only on tainted instructions
 
-	# SET TRITON ANALYSIS STARTING POINT
 	startAnalysisFromEntry()
 	# startAnalysisFromSymbol('__read')
 
 	setupImageWhitelist(['smbd'])
 
-	# INSERT CALLS ON PIN
+	# insertCall(xxx, INSERT_POINT.BEFORE_SYMPROC)
 	insertCall(before, INSERT_POINT.BEFORE)
 	# insertCall(image, INSERT_POINT.IMAGE_LOAD)
 	insertCall(syscallEntry, INSERT_POINT.SYSCALL_ENTRY)
 	insertCall(syscallExit, INSERT_POINT.SYSCALL_EXIT)
 	# insertCall(after, INSERT_POINT.AFTER)
 
-	# (Under construction) If the instruction refers to the tainted memory, mark as the range of bytes symbolic
-	#insertCall(cb_ir,       INSERT_POINT.BEFORE_SYMPROC)
 	runProgram()
