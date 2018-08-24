@@ -90,14 +90,16 @@ def syscallExit(threadId, std):
 			if ctx.isTaintEngineEnabled() is False:
 				ctx.enableTaintEngine(True)
 				f.write("[DEBUG] taintEngineEnabled\n")
-			if ctx.isSymbolicEngineEnabled() is False:
-				ctx.enableSymbolicEngine(True)
-				f.write("[DEBUG] sylbolicEngineEnabled\n")
+			# if ctx.isSymbolicEngineEnabled() is False:
+			# 	ctx.enableSymbolicEngine(True)
+			# 	f.write("[DEBUG] sylbolicEngineEnabled\n")
 
+			# Clear previous thing
 			ctx.clearPathConstraints()
 			ctx.concretizeAllMemory()
 
-			# Iterate for each byte of memory (size in memoryaccess is just CPU.SIZE!)
+			################# Start tainting and logging #################
+			# Iterate for each byte of memory (size in memoryaccess : CPU.SIZE!)
 			offset = 0
 			while offset != size:
 			    ctx.taintMemory(buf_base + offset)
@@ -146,14 +148,14 @@ def path_constraints():
 			# Branch 1
 			models  = ctx.getModel(p0)
 			if len(models) == 0:
-			for k, v in models.items():
-				p0_smvs.append(str(v))
+				for k, v in models.items():
+					p0_smvs.append(str(v))
 
 			# Branch 2
 			models  = ctx.getModel(p1)
 			if len(models) == 0:
-			for k, v in models.items():
-				p1_smvs.append(str(v))
+				for k, v in models.items():
+					p1_smvs.append(str(v))
 
 			list_brch_smvs.append(p0_smvs)
 			list_brch_smvs.append(p1_smvs)
@@ -163,27 +165,53 @@ def path_constraints():
 
 def before(instruction):
 	global f, lastRoutineString, routineAddr, instructionAddr, brch_sat_cnt, brch_unsat_cnt
-	instructionAddr = instruction.getAddress()
 
+
+def after(instruction):
+	instructionAddr = instruction.getAddress()
 	try:
 		if ctx.isTaintEngineEnabled():
 			if instruction.isTainted() is True:
 				if instruction.isBranch() is True:
-					st = time.time()
-					list_brch_smvs = path_constraints()
-					for brch_smvs in list_brch_smvs:
-						if len(brch_smvs[0]) == 0 or len(brch_smvs[1]) == 0:
-							brch_unsat_cnt += 1
-							f.write('[-] Unsat branches no. : %d' % brch_unsat_cnt)
-						else:
-							brch_sat_cnt += 1
-							f.write("[+] Sat branches no. : %d" % brch_sat_cnt)
-							et = time.time() - st
-							f.write('\t(Time elapsed : %.3f)\n' % et)
-							f.write('B1 - %s\n' % ('|'.join(brch_smvs[0])))
-							f.write('B2 - %s\n' % ('|'.join(brch_smvs[1])))
-						f.write("B")
-						f.write("\t%#x: %s\n" %(instruction.getAddress(), instruction.getDisassembly()))
+					##### Count how many branches found in this path #####
+
+					##### Take snapshot(not yet) and peek another branch #####
+					ip = ctx.getConcreteRegisterValue(ctx.registers.rip)
+					f.write("[!] JMP from %x to %x\n" % (instructionAddr, ip))
+					f.write("\t%#x: %s\n" %(instruction.getAddress(), instruction.getDisassembly()))
+					
+
+					# while True:
+						# Get next instruction
+						# inst = Instruction()
+						# Setup opcode
+						# inst.setOpcode(function[ip])
+						# Setup Address
+						# inst.setAddress(ip)
+						# If the instruction is branch, break
+
+						# If not, append the instruction to a list
+
+						# Get address of next instruction
+
+					##### Check something interesting in list, record behavior type #####
+
+					##### Solving branch constraints #####					
+					# st = time.time()
+					# list_brch_smvs = path_constraints()
+					# for brch_smvs in list_brch_smvs:
+					# 	if len(brch_smvs[0]) == 0 or len(brch_smvs[1]) == 0:
+					# 		brch_unsat_cnt += 1
+					# 		f.write('[-] Unsat branches no. : %d' % brch_unsat_cnt)
+					# 	else:
+					# 		brch_sat_cnt += 1
+					# 		f.write("[+] Sat branches no. : %d" % brch_sat_cnt)
+					# 		et = time.time() - st
+					# 		f.write('\t(Time elapsed : %.3f)\n' % et)
+					# 		f.write('B1 - %s\n' % ('|'.join(brch_smvs[0])))
+					# 		f.write('B2 - %s\n' % ('|'.join(brch_smvs[1])))
+					# 	f.write("B")
+					# 	f.write("\t%#x: %s\n" %(instruction.getAddress(), instruction.getDisassembly()))
 				else:
 					f.write("\t%#x: %s\n" %(instruction.getAddress(), instruction.getDisassembly()))
 			# if instruction.getType() == OPCODE.CALL:
@@ -191,9 +219,6 @@ def before(instruction):
 
 	except:
 		printExecInfo()
-
-def after(instruction):
-	pass
 
 if __name__ == '__main__':
 
@@ -212,10 +237,10 @@ if __name__ == '__main__':
 	setupImageWhitelist(['smbd'])
 
 	# insertCall(xxx, INSERT_POINT.BEFORE_SYMPROC)
-	insertCall(before, INSERT_POINT.BEFORE)
+	# insertCall(before, INSERT_POINT.BEFORE)
 	# insertCall(image, INSERT_POINT.IMAGE_LOAD)
 	insertCall(syscallEntry, INSERT_POINT.SYSCALL_ENTRY)
 	insertCall(syscallExit, INSERT_POINT.SYSCALL_EXIT)
-	# insertCall(after, INSERT_POINT.AFTER)
+	insertCall(after, INSERT_POINT.AFTER)
 
 	runProgram()
