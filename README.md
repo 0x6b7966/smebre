@@ -14,3 +14,4 @@ State machine expansion - using binary reverse engineering with dynamic taint an
 - Please refer to the HOWTO file in the root directory
 
 **Possible issue**
+https://github.com/Choonginlee/smebre/issues/1#issue-356670792
